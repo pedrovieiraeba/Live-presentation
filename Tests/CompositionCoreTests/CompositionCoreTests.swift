@@ -121,7 +121,7 @@ final class SceneControllerTests: XCTestCase {
 
     func testUnknownLayerContentDecodesAsHiddenLayer() throws {
         let id = UUID()
-        let json = #"{"id":"\#(id)","name":"Futuro","content":{"ndi":{"source":"CAM 1"}}}"#
+        let json = #"{"id":"\#(id)","name":"Futuro","content":{"hologram":{"source":"CAM 1"}}}"#
         let layer = try JSONDecoder().decode(Layer.self, from: Data(json.utf8))
         XCTAssertFalse(layer.isVisible)
         XCTAssertEqual(layer.name, "Futuro")
@@ -131,7 +131,9 @@ final class SceneControllerTests: XCTestCase {
         let scene = CompositionScene(name: "S", layers: [
             Layer(content: .video(assetID: UUID(), loop: true, muted: true), opacity: 0.8),
             Layer(content: .presentation(drawsThemeBackground: false)),
+            Layer(content: .ndi(sourceName: "MACBOOK (OBS)")),
         ])
+        XCTAssertEqual(scene.ndiSourceNames, ["MACBOOK (OBS)"])
         let data = try JSONEncoder().encode(scene)
         XCTAssertEqual(try JSONDecoder().decode(CompositionScene.self, from: data), scene)
     }

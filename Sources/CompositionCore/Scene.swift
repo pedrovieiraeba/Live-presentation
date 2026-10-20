@@ -25,12 +25,19 @@ public enum LayerContent: Codable, Hashable, Sendable {
     case video(assetID: UUID, loop: Bool, muted: Bool)
     /// O slide no ar (texto do `ShowController`), opcionalmente com o fundo do tema.
     case presentation(drawsThemeBackground: Bool)
+    /// Fonte NDI recebida pela rede, identificada pelo nome NDI completo.
+    case ndi(sourceName: String)
 
     public var mediaAssetID: UUID? {
         switch self {
         case .image(let id), .video(let id, _, _): return id
-        case .solid, .presentation: return nil
+        case .solid, .presentation, .ndi: return nil
         }
+    }
+
+    public var ndiSourceName: String? {
+        if case .ndi(let name) = self { return name }
+        return nil
     }
 
     public var displayName: String {
@@ -39,6 +46,7 @@ public enum LayerContent: Codable, Hashable, Sendable {
         case .image: return "Imagem"
         case .video: return "Vídeo"
         case .presentation: return "Apresentação"
+        case .ndi: return "Fonte NDI"
         }
     }
 }
@@ -142,6 +150,7 @@ public struct CompositionScene: Codable, Hashable, Identifiable, Sendable {
                        content: .presentation(drawsThemeBackground: true), fitMode: .fit)])
 
     public var mediaAssetIDs: Set<UUID> { Set(layers.compactMap(\.content.mediaAssetID)) }
+    public var ndiSourceNames: Set<String> { Set(layers.compactMap(\.content.ndiSourceName)) }
 
     public func layer(id: UUID) -> Layer? { layers.first { $0.id == id } }
 

@@ -10,6 +10,7 @@ var products: [Product] = [
     .library(name: "Diagnostics", targets: ["Diagnostics"]),
     .library(name: "MediaLibrary", targets: ["MediaLibrary"]),
     .library(name: "CompositionCore", targets: ["CompositionCore"]),
+    .library(name: "NDIService", targets: ["NDIService"]),
 ]
 
 var targets: [Target] = [
@@ -17,6 +18,9 @@ var targets: [Target] = [
     .target(name: "PresentationCore", dependencies: ["Diagnostics"]),
     .target(name: "MediaLibrary", dependencies: ["Diagnostics"]),
     .target(name: "CompositionCore", dependencies: ["PresentationCore"]),
+    // Ponte C para o NDI SDK carregado dinamicamente (o SDK não é dependência de build).
+    .target(name: "CNDI", linkerSettings: [.linkedLibrary("dl", .when(platforms: [.linux]))]),
+    .target(name: "NDIService", dependencies: ["CNDI", "Diagnostics"]),
     .systemLibrary(
         name: "CSQLite",
         path: "Sources/CSQLite",
@@ -40,6 +44,7 @@ var targets: [Target] = [
                 dependencies: ["Persistence", "PresentationCore", "MediaLibrary", "CompositionCore"]),
     .testTarget(name: "MediaLibraryTests", dependencies: ["MediaLibrary"]),
     .testTarget(name: "CompositionCoreTests", dependencies: ["CompositionCore", "PresentationCore"]),
+    .testTarget(name: "NDIServiceTests", dependencies: ["NDIService", "CNDI"]),
 ]
 
 #if os(macOS)
@@ -48,12 +53,12 @@ targets.append(contentsOf: [
     // Motor de composição Metal (somente macOS).
     .target(
         name: "CompositionEngine",
-        dependencies: ["CompositionCore", "MediaLibrary", "PresentationCore", "Diagnostics"]
+        dependencies: ["CompositionCore", "MediaLibrary", "PresentationCore", "NDIService", "Diagnostics"]
     ),
     .executableTarget(
         name: "LivePresentationApp",
         dependencies: ["PresentationCore", "Persistence", "Diagnostics", "MediaLibrary",
-                       "CompositionCore", "CompositionEngine"]
+                       "CompositionCore", "CompositionEngine", "NDIService"]
     ),
 ])
 #endif
