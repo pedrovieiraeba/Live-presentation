@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    name: macOS — app + testes
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ambiente
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+      - name: Build (inclui o app SwiftUI)
+        run: swift build
+      - name: Testes
+        run: swift test
+
+  linux:
+    name: Linux — núcleo + testes
+    runs-on: ubuntu-24.04
+    container: swift:6.0-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependências
+        run: apt-get update && apt-get install -y libsqlite3-dev
+      - name: Testes
+        run: swift test

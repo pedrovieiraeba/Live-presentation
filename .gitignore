@@ -1,0 +1,15 @@
+.DS_Store
+/.build
+/.swiftpm
+/Packages
+*.xcodeproj/xcuserdata
+*.xcworkspace/xcuserdata
+DerivedData/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+# Segredos nunca entram no repositório
+*.p12
+*.pem
+client_secret*.json
+.env
