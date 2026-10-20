@@ -1,5 +1,8 @@
 import AppKit
+import CompositionCore
+import CompositionEngine
 import Diagnostics
+import MediaLibrary
 import Persistence
 import PresentationCore
 import SwiftUI
@@ -24,21 +27,47 @@ final class AppModel: ObservableObject {
     @Published var alertMessage: String?
     @Published private(set) var isBootstrapped = false
 
+    @Published private(set) var profile: CompositionProfile = .hd1080p30
+
     let output = OutputWindowController()
     let fitMeasurer: TextFitMeasuring = AppKitTextFitMeasurer()
+    let media = MediaModel()
+    let scenes = SceneModel()
+    /// Motor Metal; `nil` se o Metal não estiver disponível (a saída volta ao
+    /// desenho SwiftUI da Fase 1, sem camadas de mídia).
+    let engine: CompositionEngine?
 
     private var store: LibraryStore?
     private var autosaveTask: Task<Void, Never>?
     private var sessionTask: Task<Void, Never>?
     private let log = AppLogger(category: "app")
+    private var lastSlideKey: SlideRenderKey?
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+
+    private struct SlideRenderKey: Equatable {
+        var frame: OutputFrame?
+        var theme: Theme?
+        var width: Int
+    }
 
     init() {
+        engine = CompositionEngine.make(profile: .hd1080p30)
         output.contentProvider = { [unowned self] in
-            AnyView(OutputRootView().environmentObject(self))
+            if let engine = self.engine {
+                return AnyView(MetalOutputView(engine: engine).ignoresSafeArea())
+            }
+            return AnyView(OutputRootView().environmentObject(self))
         }
         output.onTargetLost = { [weak self] message in
             self?.alertMessage = message
         }
+        media.onAssetsChanged = { [weak self] in self?.pushProgramToEngine() }
+        media.onError = { [weak self] message in self?.alertMessage = message }
+        scenes.onProgramChanged = { [weak self] _ in
+            self?.pushProgramToEngine()
+            self?.scheduleSessionSave()
+        }
+        scenes.onError = { [weak self] message in self?.alertMessage = message }
     }
 
     // MARK: Ciclo de vida
@@ -74,6 +103,10 @@ final class AppModel: ObservableObject {
 
         // Recuperação: reabre a apresentação e a prévia, nunca o ar.
         let session = await store.loadSession()
+        profile = CompositionProfile.profile(id: session?.compositionProfileID)
+        engine?.setProfile(profile, assets: [:])
+        await media.attach(store: store)
+        await scenes.attach(store: store, programSceneID: session?.programSceneID)
         let targetID = session?.activePresentationID.flatMap { id in summaries.first { $0.id == id }?.id }
             ?? summaries.first?.id
         if let targetID, let presentation = try? await store.presentation(id: targetID) {
@@ -82,11 +115,16 @@ final class AppModel: ObservableObject {
             if session != nil { log.notice("Sessão anterior restaurada (sem conteúdo no ar)") }
         }
         output.refreshScreens()
+        engine?.start()
+        syncEngineSlide()
+        startMemoryPressureMonitor()
     }
 
     func prepareForTermination() async {
         output.close()
+        await scenes.flush()
         await flushPendingWrites()
+        engine?.stop()
         log.info("Encerramento controlado")
     }
 
@@ -171,6 +209,7 @@ final class AppModel: ObservableObject {
         current.replacePresentation(presentation)
         show = current
         scheduleAutosave()
+        syncEngineSlide()
     }
 
     func addItem(kind: ItemKind) {
@@ -201,6 +240,7 @@ final class AppModel: ObservableObject {
         do {
             try await store.save(theme)
             themes = try await store.themes()
+            syncEngineSlide()
         } catch {
             report(error, code: "E-THEME-SAVE", "Não foi possível salvar o tema")
         }
@@ -232,6 +272,7 @@ final class AppModel: ObservableObject {
         let before = current.state
         action(&current)
         show = current
+        syncEngineSlide()
         if before.live != current.state.live || before.blackout != current.state.blackout
             || before.textHidden != current.state.textHidden {
             log.info("Saída: \(describe(current.output))")
@@ -285,7 +326,9 @@ final class AppModel: ObservableObject {
         guard let store else { return }
         let snapshot = SessionSnapshot(activePresentationID: show?.presentation.id,
                                        showState: show?.state,
-                                       outputScreenName: output.target?.displayName)
+                                       outputScreenName: output.target?.displayName,
+                                       programSceneID: scenes.program?.id,
+                                       compositionProfileID: profile.id)
         do {
             try await store.saveSession(snapshot)
         } catch {
@@ -302,6 +345,68 @@ final class AppModel: ObservableObject {
         sessionTask?.cancel()
         sessionTask = nil
         await saveSession()
+    }
+
+    // MARK: Composição
+
+    func setProfile(_ newProfile: CompositionProfile) {
+        guard newProfile != profile else { return }
+        profile = newProfile
+        engine?.setProfile(newProfile, assets: media.assetsByID)
+        lastSlideKey = nil
+        syncEngineSlide()
+        scheduleSessionSave()
+        if newProfile.status == .experimental {
+            log.warning("Perfil experimental ativado: \(newProfile.name)", code: "W-PROFILE-EXPERIMENTAL")
+        }
+    }
+
+    private func pushProgramToEngine() {
+        engine?.setProgram(scenes.program, assets: media.assetsByID)
+    }
+
+    /// Envia ao motor o slide no ar, renderizado no tamanho da composição.
+    /// Só re-renderiza quando o quadro, o tema ou a resolução mudam.
+    private func syncEngineSlide() {
+        guard let engine else { return }
+        engine.setBlackout(show?.state.blackout ?? false)
+        let frame = show?.output
+        var frameTheme: Theme?
+        switch frame {
+        case let .slide(_, id), let .background(id): frameTheme = theme(id: id)
+        default: break
+        }
+        let key = SlideRenderKey(frame: frame, theme: frameTheme, width: profile.width)
+        guard key != lastSlideKey else { return }
+        lastSlideKey = key
+        switch frame {
+        case let .slide(text, _):
+            guard let frameTheme else { return }
+            let image = SlideImageRenderer.render(text: text, theme: frameTheme, width: profile.width)
+            if image == nil { log.error("Falha ao renderizar o slide", code: "E-SLIDE-RENDER") }
+            engine.setSlide(image: image, background: frameTheme.backgroundColor)
+        case .background:
+            engine.setSlide(image: nil, background: frameTheme?.backgroundColor)
+        case .black, .none:
+            engine.setSlide(image: nil, background: nil)
+        }
+    }
+
+    private func startMemoryPressureMonitor() {
+        guard memoryPressureSource == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            guard let event = source?.data else { return }
+            MainActor.assumeIsolated { self?.handleMemoryPressure(critical: event.contains(.critical)) }
+        }
+        source.resume()
+        memoryPressureSource = source
+    }
+
+    private func handleMemoryPressure(critical: Bool) {
+        log.warning("Pressão de memória \(critical ? "crítica" : "alta"): descartando caches", code: "W-MEMORY-PRESSURE")
+        media.purgeThumbnails()
+        if critical { engine?.purgeCaches(assets: media.assetsByID) }
     }
 
     private func report(_ error: Error, code: String, _ message: String) {

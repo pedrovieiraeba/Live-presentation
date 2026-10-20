@@ -3,8 +3,7 @@ import PresentationCore
 import SwiftUI
 
 /// Desenha um slide na tela de referência (1920×1080) e escala para caber no
-/// espaço disponível, com tarja preta. A mesma view serve à saída, às prévias e
-/// às miniaturas — o que o operador vê é o que o público vê.
+/// espaço disponível, com tarja preta. Serve às prévias e às miniaturas.
 struct SlideCanvasView: View {
     var text: String?
     var theme: Theme?
@@ -17,8 +16,7 @@ struct SlideCanvasView: View {
             let scale = min(geo.size.width / canvas.width, geo.size.height / canvas.height)
             ZStack {
                 Color.black
-                content
-                    .frame(width: canvas.width, height: canvas.height)
+                SlideContentView(text: text, theme: theme, showsSafeArea: showsSafeArea)
                     .scaleEffect(scale, anchor: .center)
                     .frame(width: canvas.width * scale, height: canvas.height * scale)
             }
@@ -27,13 +25,32 @@ struct SlideCanvasView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(text ?? "Tela vazia")
     }
+}
+
+/// Conteúdo do slide em tamanho fixo de referência (1920×1080). Também é o que
+/// o motor de composição recebe, renderizado em imagem (`SlideImageRenderer`).
+struct SlideContentView: View {
+    var text: String?
+    var theme: Theme?
+    var showsSafeArea = false
+    var drawsBackground = true
+
+    private let canvas = Theme.referenceCanvas
+
+    var body: some View {
+        content.frame(width: canvas.width, height: canvas.height)
+    }
 
     @ViewBuilder
     private var content: some View {
         if let theme {
             let area = theme.safeArea(in: canvas)
             ZStack {
-                theme.backgroundColor.swiftUIColor
+                if drawsBackground {
+                    theme.backgroundColor.swiftUIColor
+                } else {
+                    Color.clear
+                }
                 if let text, !text.isEmpty {
                     Text(theme.uppercase ? text.uppercased() : text)
                         .font(theme.swiftUIFont)
@@ -53,9 +70,23 @@ struct SlideCanvasView: View {
                         .position(x: area.x + area.width / 2, y: area.y + area.height / 2)
                 }
             }
-        } else {
+        } else if drawsBackground {
             Color.black
+        } else {
+            Color.clear
         }
+    }
+}
+
+/// Renderiza o texto do slide (sem fundo) numa imagem do tamanho exato da
+/// composição. O fundo do tema é desenhado pelo motor, abaixo do texto.
+enum SlideImageRenderer {
+    @MainActor
+    static func render(text: String, theme: Theme, width: Int) -> CGImage? {
+        let renderer = ImageRenderer(content: SlideContentView(text: text, theme: theme, drawsBackground: false))
+        renderer.scale = CGFloat(width) / CGFloat(Theme.referenceCanvas.width)
+        renderer.isOpaque = false
+        return renderer.cgImage
     }
 }
 

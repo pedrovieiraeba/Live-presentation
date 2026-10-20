@@ -1,3 +1,5 @@
+import CompositionCore
+import CompositionEngine
 import PresentationCore
 import SwiftUI
 
@@ -14,8 +16,12 @@ struct ControlPanel: View {
 
                 transport
 
-                monitor(title: "NO AR", tint: .red, text: liveText, theme: liveTheme,
-                        caption: liveCaption, showsSafeArea: false)
+                if let engine = model.engine {
+                    programMonitor(engine: engine)
+                } else {
+                    monitor(title: "NO AR", tint: .red, text: liveText, theme: liveTheme,
+                            caption: liveCaption, showsSafeArea: false)
+                }
 
                 liveWarnings
 
@@ -24,6 +30,8 @@ struct ControlPanel: View {
                         Text(notes).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+
+                CompositionControls(scenes: model.scenes)
 
                 OutputTargetPicker(output: model.output)
             }
@@ -48,6 +56,24 @@ struct ControlPanel: View {
             SlideCanvasView(text: text, theme: theme, showsSafeArea: showsSafeArea)
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(tint, lineWidth: 2))
+        }
+    }
+
+    /// Monitor de programa: a textura real do motor, idêntica à saída.
+    private func programMonitor(engine: CompositionEngine) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("NO AR")
+                    .font(.caption.weight(.heavy))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.red, in: RoundedRectangle(cornerRadius: 3))
+                    .foregroundStyle(.white)
+                Text(liveCaption).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            MetalOutputView(engine: engine, framesPerSecond: 15)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.red, lineWidth: 2))
         }
     }
 
@@ -199,6 +225,62 @@ private struct OutputTargetPicker: View {
                     Text("Conecte um segundo monitor ou projetor para saída em tela cheia.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Cena no ar e resolução da composição.
+private struct CompositionControls: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var scenes: SceneModel
+
+    var body: some View {
+        GroupBox("Composição") {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Cena no ar", selection: Binding(
+                    get: { scenes.program?.id },
+                    set: { id in if let id { scenes.take(sceneID: id) } })) {
+                    ForEach(scenes.scenes) { Text($0.name).tag(UUID?.some($0.id)) }
+                    if let program = scenes.program, scenes.controller.scene(id: program.id) == nil {
+                        Text("\(program.name) (apagada)").tag(UUID?.some(program.id))
+                    }
+                }
+                if scenes.controller.programIsStale {
+                    HStack {
+                        Label("A cena no ar foi editada.", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        Button("Atualizar no ar") { scenes.refreshProgram() }
+                    }
+                }
+                Picker("Resolução", selection: Binding(
+                    get: { model.profile },
+                    set: { model.setProfile($0) })) {
+                    ForEach(CompositionProfile.builtIn) { Text($0.name).tag($0) }
+                }
+                .disabled(model.engine == nil)
+                if model.profile.status == .experimental {
+                    Text("4K ainda não foi validado no Mac mini M4 com o Logic aberto. Use em ensaio, não em culto.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let engine = model.engine {
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        let issues = engine.currentStats().issues
+                        if !issues.isEmpty {
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(issues, id: \.self) { issue in
+                                    Label(issue, systemImage: "exclamationmark.triangle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

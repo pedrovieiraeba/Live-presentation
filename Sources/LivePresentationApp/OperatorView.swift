@@ -11,8 +11,8 @@ struct OperatorView: View {
                 LibrarySidebar()
                     .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
             } content: {
-                WorkspaceView()
-                    .navigationSplitViewColumnWidth(min: 460, ideal: 640)
+                ContentArea()
+                    .navigationSplitViewColumnWidth(min: 520, ideal: 700)
             } detail: {
                 ControlPanel()
                     .frame(minWidth: 360)
@@ -27,6 +27,38 @@ struct OperatorView: View {
             Button("OK", role: .cancel) { model.alertMessage = nil }
         } message: {
             Text(model.alertMessage ?? "")
+        }
+    }
+}
+
+// MARK: Abas de conteúdo
+
+enum ContentTab: String, CaseIterable, Identifiable {
+    case presentation = "Apresentação"
+    case media = "Mídia"
+    case scenes = "Cenas"
+    var id: String { rawValue }
+}
+
+struct ContentArea: View {
+    @EnvironmentObject private var model: AppModel
+    @AppStorage("contentTab") private var tab: ContentTab = .presentation
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Área", selection: $tab) {
+                ForEach(ContentTab.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 420)
+            .padding(8)
+            Divider()
+            switch tab {
+            case .presentation: WorkspaceView()
+            case .media: MediaLibraryView(media: model.media, scenes: model.scenes)
+            case .scenes: ScenesView(scenes: model.scenes, media: model.media)
+            }
         }
     }
 }
@@ -111,6 +143,11 @@ private struct StatusBarContent: View {
             indicator(icon: output.isOpen ? "display" : "display.trianglebadge.exclamationmark",
                       title: "Saída", value: output.target?.displayName ?? "fechada",
                       state: output.isOpen ? .ok : .warning)
+            indicator(icon: "square.3.layers.3d", title: "Composição",
+                      value: model.engine == nil
+                        ? "sem Metal — saída simplificada"
+                        : "\(model.profile.name) · cena \(model.scenes.program?.name ?? "-")",
+                      state: model.engine == nil ? .warning : (model.profile.status == .experimental ? .warning : .ok))
             indicator(icon: "dot.radiowaves.left.and.right", title: "NDI", value: "não implementado (fase 3)",
                       state: .unavailable)
             indicator(icon: "waveform", title: "Áudio", value: "não implementado (fase 4)", state: .unavailable)

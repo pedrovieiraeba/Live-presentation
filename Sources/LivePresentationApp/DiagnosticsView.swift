@@ -1,3 +1,4 @@
+import CompositionEngine
 import Darwin
 import Diagnostics
 import SwiftUI
@@ -5,6 +6,7 @@ import SwiftUI
 /// Painel local de diagnóstico: logs recentes (já redigidos) e uso de memória.
 /// Nada é enviado para fora da máquina.
 struct DiagnosticsView: View {
+    @EnvironmentObject private var model: AppModel
     @State private var minimumLevel: LogLevel = .info
 
     var body: some View {
@@ -21,6 +23,7 @@ struct DiagnosticsView: View {
                     .frame(width: 200)
                     Button("Limpar") { LogBuffer.shared.clear() }
                 }
+                compositionStats
                 Table(Array(LogBuffer.shared.entries(minimumLevel: minimumLevel).reversed())) {
                     TableColumn("Hora") { entry in
                         Text(entry.date.formatted(date: .omitted, time: .standard)).monospacedDigit()
@@ -36,6 +39,26 @@ struct DiagnosticsView: View {
                 }
             }
             .padding(12)
+        }
+    }
+
+    @ViewBuilder
+    private var compositionStats: some View {
+        if let engine = model.engine {
+            let stats = engine.currentStats()
+            HStack(spacing: 18) {
+                Label("\(stats.profileName)", systemImage: "square.3.layers.3d")
+                Text("Quadros/s: \(String(format: "%.0f", stats.measuredFPS))/\(stats.targetFPS)")
+                Text("Descartados: \(stats.droppedFrames)")
+                Text("GPU: \(String(format: "%.2f", stats.averageGPUTimeMs)) ms")
+                Text("Vídeos ativos: \(stats.activeVideoLayers)")
+                Text("Texturas ≈ \(ByteCountFormatter.string(fromByteCount: Int64(stats.estimatedTextureMemoryBytes), countStyle: .memory))")
+                Text("Miniaturas ≈ \(ByteCountFormatter.string(fromByteCount: Int64(model.media.thumbnailCacheBytes), countStyle: .memory))")
+            }
+            .font(.caption.monospacedDigit())
+        } else {
+            Label("Motor de composição indisponível (sem Metal)", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
         }
     }
 
