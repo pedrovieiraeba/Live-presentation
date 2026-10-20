@@ -13,6 +13,7 @@ struct QuadUniforms {
     float4 dest;   // x0, yTopo, x1, yBase (NDC)
     float4 src;    // u0, v0, u1, v1
     float4 tint;   // pré-multiplicado, inclui opacidade
+    float4 options; // x > 0.5: ignora o alfa da textura (ex.: NDI BGRX)
 };
 
 struct VertexOut {
@@ -33,7 +34,9 @@ fragment float4 quad_fragment(VertexOut in [[stage_in]],
                               texture2d<float> tex [[texture(0)]],
                               sampler s [[sampler(0)]],
                               constant QuadUniforms &u [[buffer(0)]]) {
-    return tex.sample(s, in.uv) * u.tint;
+    float4 c = tex.sample(s, in.uv);
+    if (u.options.x > 0.5) { c.a = 1.0; }
+    return c * u.tint;
 }
 """
 
@@ -41,6 +44,7 @@ struct QuadUniforms {
     var dest: SIMD4<Float>
     var src: SIMD4<Float>
     var tint: SIMD4<Float>
+    var options: SIMD4<Float> = .zero
 }
 
 enum CompositionEngineError: Error, CustomStringConvertible {
@@ -106,13 +110,14 @@ final class QuadRenderer {
     }
 
     func draw(_ encoder: MTLRenderCommandEncoder, texture: MTLTexture, quad: RenderQuad,
-              canvas: CanvasSize, tint: SIMD4<Float>) {
+              canvas: CanvasSize, tint: SIMD4<Float>, ignoresAlpha: Bool = false) {
         let (x0, yTop, x1, yBottom) = LayerLayout.normalizedDeviceRect(quad.destination, canvas: canvas)
         let s = quad.source
         var uniforms = QuadUniforms(
             dest: SIMD4(Float(x0), Float(yTop), Float(x1), Float(yBottom)),
             src: SIMD4(Float(s.x), Float(s.y), Float(s.x + s.width), Float(s.y + s.height)),
-            tint: tint)
+            tint: tint,
+            options: SIMD4(ignoresAlpha ? 1 : 0, 0, 0, 0))
         encoder.setRenderPipelineState(pipeline)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<QuadUniforms>.stride, index: 0)

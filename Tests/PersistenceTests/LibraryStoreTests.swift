@@ -215,3 +215,15 @@ final class LibraryStoreV2Tests: XCTestCase {
         XCTAssertNil(snapshot.compositionProfileID)
     }
 }
+
+final class SessionSnapshotNDITests: XCTestCase {
+    func testNDIPreferencesRoundTrip() async throws {
+        let store = try LibraryStore(path: ":memory:")
+        let snapshot = SessionSnapshot(activePresentationID: nil, showState: nil,
+                                       ndiOutputEnabled: true, ndiOutputName: "Templo — Programa",
+                                       savedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try await store.saveSession(snapshot)
+        let loaded = await store.loadSession()
+        XCTAssertEqual(loaded, snapshot)
+    }
+}

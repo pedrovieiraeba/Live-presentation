@@ -33,6 +33,7 @@ final class AppModel: ObservableObject {
     let fitMeasurer: TextFitMeasuring = AppKitTextFitMeasurer()
     let media = MediaModel()
     let scenes = SceneModel()
+    let ndi = NDIModel()
     /// Motor Metal; `nil` se o Metal não estiver disponível (a saída volta ao
     /// desenho SwiftUI da Fase 1, sem camadas de mídia).
     let engine: CompositionEngine?
@@ -68,6 +69,11 @@ final class AppModel: ObservableObject {
             self?.scheduleSessionSave()
         }
         scenes.onError = { [weak self] message in self?.alertMessage = message }
+        ndi.onError = { [weak self] message in self?.alertMessage = message }
+        ndi.onLimitChanged = { [weak self] limit in
+            guard let self else { return }
+            self.engine?.setMaxActiveNDISources(limit, assets: self.media.assetsByID)
+        }
     }
 
     // MARK: Ciclo de vida
@@ -105,6 +111,7 @@ final class AppModel: ObservableObject {
         let session = await store.loadSession()
         profile = CompositionProfile.profile(id: session?.compositionProfileID)
         engine?.setProfile(profile, assets: [:])
+        ndi.attach(engine: engine)
         await media.attach(store: store)
         await scenes.attach(store: store, programSceneID: session?.programSceneID)
         let targetID = session?.activePresentationID.flatMap { id in summaries.first { $0.id == id }?.id }
@@ -117,6 +124,13 @@ final class AppModel: ObservableObject {
         output.refreshScreens()
         engine?.start()
         syncEngineSlide()
+        // A saída NDI volta só se estava ligada e o SDK está presente; não é
+        // conteúdo de texto, é o mesmo sinal da saída de vídeo.
+        if session?.ndiOutputEnabled == true, ndi.isAvailable {
+            ndi.setOutput(enabled: true, name: session?.ndiOutputName)
+        } else if let name = session?.ndiOutputName {
+            ndi.outputName = name
+        }
         startMemoryPressureMonitor()
     }
 
@@ -124,6 +138,7 @@ final class AppModel: ObservableObject {
         output.close()
         await scenes.flush()
         await flushPendingWrites()
+        ndi.shutdown()
         engine?.stop()
         log.info("Encerramento controlado")
     }
@@ -328,7 +343,9 @@ final class AppModel: ObservableObject {
                                        showState: show?.state,
                                        outputScreenName: output.target?.displayName,
                                        programSceneID: scenes.program?.id,
-                                       compositionProfileID: profile.id)
+                                       compositionProfileID: profile.id,
+                                       ndiOutputEnabled: ndi.outputEnabled,
+                                       ndiOutputName: ndi.outputName)
         do {
             try await store.saveSession(snapshot)
         } catch {
@@ -359,6 +376,11 @@ final class AppModel: ObservableObject {
         if newProfile.status == .experimental {
             log.warning("Perfil experimental ativado: \(newProfile.name)", code: "W-PROFILE-EXPERIMENTAL")
         }
+    }
+
+    func setNDIOutput(enabled: Bool, name: String? = nil) {
+        ndi.setOutput(enabled: enabled, name: name)
+        scheduleSessionSave()
     }
 
     private func pushProgramToEngine() {

@@ -27,13 +27,13 @@ LivePresentationApp (macOS: SwiftUI/AppKit)
    └── Diagnostics (todos)
 ```
 
-Módulos da Fase 2 já criados: `MediaLibrary`, `CompositionCore`, `CompositionEngine`.
+Módulos já criados: `MediaLibrary`, `CompositionCore`, `CompositionEngine` (Fase 2) e
+`CNDI`, `NDIService` (Fase 3).
 Módulos previstos na especificação e ainda não criados (cada um entra na sua fase, atrás
 de um protocolo para permitir testes sem SDK real):
 
 | Módulo | Fase | Responsabilidade |
 |---|---|---|
-| `NDIService` | 3 | descoberta, recepção, publicação; SDK isolado |
 | `AudioRouting` | 4 | seleção explícita de dispositivo, medidor de nível, compensação A/V |
 | `StreamingEngine` | 4 | VideoToolbox H.264, RTMP(S), métricas, reconexão com limite |
 | `YouTubeService` | 4 | OAuth 2.0 (Keychain), Live Streaming API |
@@ -70,12 +70,24 @@ Critérios (spec §11/§17) e como foram atendidos:
 - [ ] **Medir** memória/CPU/GPU no Mac mini M4 (Instruments + painel de diagnóstico) com
       cenas de teste — roteiro em `docs/MEDICOES.md`. Pendente: depende do hardware-alvo.
 
-### Fase 3 — NDI
+### Fase 3 — NDI ✅ (código) / ⏳ (validação com SDK real)
 
-Pré-requisito: o usuário baixa e instala o NDI SDK for Apple e aceita a licença (não é
-redistribuível no repositório). Integração por um target de sistema/binário isolado,
-atrás de `protocol NDISourceDiscovery`, `NDIReceiver`, `NDISender`. Testes com doubles
-**explicitamente marcados** como tal; validação real exige rede cabeada.
+- [x] Módulo isolado `NDIService` atrás de protocolos (`NDIRuntime`, `NDIFinder`,
+      `NDIReceiver`, `NDISender`); dublês de teste explicitamente falsos.
+- [x] SDK carregado dinamicamente (`CNDI` + `dlopen`): não é dependência de build nem é
+      redistribuído; sem ele o app informa “SDK NDI não instalado”.
+- [x] Descoberta periódica fora da main thread.
+- [x] Fonte NDI como camada; estados conectando/conectada/perdida/indisponível com
+      reconexão por espera crescente (1→10 s), sempre visível e numerada.
+- [x] Recepção em thread própria; só o último quadro é mantido; upload para anel de 3
+      texturas (uma cópia, inevitável sem `IOSurface`); só camadas no ar recebem.
+- [x] Composição publicada como saída NDI nomeada: blit para buffers compartilhados (anel de
+      3), envio numa fila própria, descarte contado se a rede atrasar.
+- [x] Limite configurável de fontes simultâneas (padrão 2); diagnóstico por fonte e da saída.
+- [ ] **Validar com o SDK real**: conferir `Sources/CNDI/include/cndi.h` contra os headers
+      instalados; receber uma fonte; puxar o cabo e reconectar; ver a saída em outro
+      cliente NDI (ex.: NDI Studio Monitor); medir com o Logic aberto. Pendente: depende
+      do SDK e do hardware.
 
 ### Fase 4 — Áudio e transmissão
 
@@ -106,8 +118,9 @@ memória induzida, checklist pré-evento.
 
 Mantidas abertas, com hipótese adotada:
 
-- Nº de fontes NDI simultâneas — hipótese: configurável, começar validando 1.
-- Mais de uma saída NDI — hipótese: arquitetura permite, v1 publica uma.
+- Nº de fontes NDI simultâneas — configurável na interface (padrão 2, máx. 8); validar
+  consumo por fonte antes de aumentar.
+- Mais de uma saída NDI — v1 publica uma; o motor pode ganhar mais emissores depois.
 - Resoluções/FPS por destino — hipótese: 1080p30 como único perfil “operacional”.
 - Rota de áudio do Logic — sem hipótese; o app vai apenas listar dispositivos.
 - YouTube cria eventos ou só vincula — hipótese: v1 vincula a transmissão já criada.

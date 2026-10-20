@@ -268,6 +268,7 @@ private struct CompositionControls: View {
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                NDIOutputControls(ndi: model.ndi)
                 if let engine = model.engine {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         let issues = engine.currentStats().issues
@@ -285,5 +286,46 @@ private struct CompositionControls: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// Publicação da composição como saída NDI.
+private struct NDIOutputControls: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var ndi: NDIModel
+    @State private var nameDraft = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Publicar saída NDI", isOn: Binding(
+                get: { ndi.outputEnabled },
+                set: { model.setNDIOutput(enabled: $0, name: nameDraft) }))
+                .disabled(!ndi.isAvailable || model.engine == nil)
+            HStack {
+                TextField("Nome da saída NDI", text: $nameDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { if ndi.outputEnabled { model.setNDIOutput(enabled: true, name: nameDraft) } }
+                if ndi.outputEnabled, let engine = model.engine {
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        if let stats = engine.currentStats().ndiOutput {
+                            Text("\(stats.connections) conexão(ões) · \(stats.framesDropped) descartado(s)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            if !ndi.isAvailable {
+                Text("SDK NDI não instalado. Instale o NDI SDK for Apple para receber e publicar NDI.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Stepper("Fontes NDI simultâneas: \(ndi.maxActiveSources)",
+                    value: Binding(get: { ndi.maxActiveSources }, set: { ndi.setMaxActiveSources($0) }),
+                    in: 0...8)
+                .help("Limite de fontes recebidas ao mesmo tempo; meça o consumo antes de aumentar")
+        }
+        .onAppear { nameDraft = ndi.outputName }
     }
 }

@@ -5,6 +5,7 @@ import Foundation
 import MediaLibrary
 import Metal
 import MetalKit
+import NDIService
 import PresentationCore
 import QuartzCore
 
@@ -21,6 +22,25 @@ public struct CompositionStats: Equatable, Sendable {
     /// Estimativa (largura × altura × 4 bytes) das texturas mantidas pelo motor.
     public var estimatedTextureMemoryBytes = 0
     public var issues: [String] = []
+    public var ndiSources: [NDILayerStats] = []
+    public var ndiOutput: NDIOutputSender.Stats?
+}
+
+public struct NDILayerStats: Equatable, Sendable, Identifiable {
+    public var layerID: UUID
+    public var layerName: String
+    public var receiver: NDIReceiverStats
+    public var id: UUID { layerID }
+}
+
+/// Anel de texturas para os quadros de uma fonte NDI (escrita pela CPU sem
+/// conflito com leituras da GPU ainda em voo).
+private final class NDITextureRing {
+    var textures: [MTLTexture] = []
+    var next = 0
+    var lastGeneration: UInt64 = .max
+    var current: MTLTexture?
+    var ignoresAlpha = false
 }
 
 /// Motor de composição: renderiza a cena no ar numa textura própria, na
@@ -57,6 +77,17 @@ public final class CompositionEngine: @unchecked Sendable {
     private var stats = CompositionStats()
     private var gpuTimes: [Double] = []
     private var frameTimestamps: [CFTimeInterval] = []
+    private var ndiRuntime: NDIRuntime?
+    private var ndiWorkers: [UUID: NDIReceiverWorker] = [:]
+    private var ndiOutput: NDIOutputSender?
+    private var stagingBuffers: [MTLBuffer] = []
+    private var stagingBusy: [Bool] = []
+    private var nextStaging = 0
+    /// Limite configurável de fontes NDI recebidas ao mesmo tempo (spec §4.5).
+    private var maxActiveNDISources = 2
+
+    // Somente na fila de render:
+    private var ndiTextures: [UUID: NDITextureRing] = [:]
 
     // Somente main thread:
     private var slideGeneration = 0
@@ -104,8 +135,157 @@ public final class CompositionEngine: @unchecked Sendable {
         lock.lock()
         let sources = videoSources
         videoSources.removeAll()
+        let workers = ndiWorkers
+        ndiWorkers.removeAll()
+        let output = ndiOutput
+        ndiOutput = nil
         lock.unlock()
         for source in sources.values { source.stop() }
+        for worker in workers.values { worker.stop() }
+        output?.drain()
+    }
+
+    // MARK: NDI
+
+    /// Runtime NDI carregado (ou `nil` se o SDK não estiver instalado).
+    public func setNDIRuntime(_ runtime: NDIRuntime?, maxActiveSources: Int) {
+        lock.lock()
+        ndiRuntime = runtime
+        maxActiveNDISources = max(maxActiveSources, 0)
+        lock.unlock()
+    }
+
+    public func setMaxActiveNDISources(_ value: Int, assets: [UUID: MediaAsset]) {
+        lock.lock(); maxActiveNDISources = max(value, 0); lock.unlock()
+        setProgram(lockedProgram, assets: assets)
+    }
+
+    /// Publica (ou para de publicar) a composição como saída NDI.
+    public func setNDIOutput(_ sender: NDIOutputSender?) {
+        lock.lock()
+        let previous = ndiOutput
+        ndiOutput = sender
+        lock.unlock()
+        if previous !== sender { previous?.drain() }
+    }
+
+    private func reconcileNDI(scene: CompositionScene?) -> [UUID: String] {
+        var issues: [UUID: String] = [:]
+        lock.lock()
+        let runtime = ndiRuntime
+        let limit = maxActiveNDISources
+        let existing = ndiWorkers
+        lock.unlock()
+
+        var wanted: [(layer: Layer, source: String)] = []
+        for layer in scene?.layers ?? [] {
+            guard let source = layer.content.ndiSourceName else { continue }
+            if runtime == nil {
+                issues[layer.id] = "\(layer.name): SDK NDI não instalado"
+            } else if source.isEmpty {
+                issues[layer.id] = "\(layer.name): nenhuma fonte NDI escolhida"
+            } else if wanted.count >= limit {
+                issues[layer.id] = "\(layer.name): limite de \(limit) fonte(s) NDI ativa(s) atingido"
+            } else {
+                wanted.append((layer, source))
+            }
+        }
+
+        var workers: [UUID: NDIReceiverWorker] = [:]
+        for (layer, source) in wanted {
+            if let worker = existing[layer.id], worker.sourceName == source {
+                workers[layer.id] = worker
+            } else if let runtime {
+                let worker = NDIReceiverWorker(runtime: runtime, sourceName: source)
+                worker.start()
+                workers[layer.id] = worker
+            }
+        }
+        let removed = existing.filter { workers[$0.key] !== $0.value }.map(\.value)
+        lock.lock(); ndiWorkers = workers; lock.unlock()
+        // Encerrar um receptor pode levar até um timeout de captura: fora da main thread.
+        if !removed.isEmpty {
+            DispatchQueue.global(qos: .utility).async { removed.forEach { $0.stop() } }
+        }
+        return issues
+    }
+
+    /// Copia o quadro NDI mais novo para uma textura do anel (fila de render).
+    private func ndiTexture(for layerID: UUID, worker: NDIReceiverWorker) -> (MTLTexture, Bool)? {
+        let ring = ndiTextures[layerID] ?? NDITextureRing()
+        ndiTextures[layerID] = ring
+        if let newest = worker.latestFrame(), newest.generation != ring.lastGeneration {
+            let frame = newest.frame
+            let generation = newest.generation
+            if ring.textures.first.map({ $0.width != frame.width || $0.height != frame.height }) ?? true {
+                let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: .bgra8Unorm, width: frame.width, height: frame.height, mipmapped: false)
+                descriptor.usage = .shaderRead
+                descriptor.storageMode = device.hasUnifiedMemory ? .shared : .managed
+                ring.textures = (0..<3).compactMap { _ in device.makeTexture(descriptor: descriptor) }
+                ring.next = 0
+            }
+            if ring.textures.count == 3 {
+                let texture = ring.textures[ring.next]
+                ring.next = (ring.next + 1) % 3
+                texture.replace(region: MTLRegionMake2D(0, 0, frame.width, frame.height), mipmapLevel: 0,
+                                withBytes: frame.data, bytesPerRow: frame.bytesPerRow)
+                ring.current = texture
+                ring.ignoresAlpha = frame.ignoresAlpha
+                ring.lastGeneration = generation
+            }
+        }
+        return ring.current.map { ($0, ring.ignoresAlpha) }
+    }
+
+    /// Copia a textura composta para um buffer compartilhado e entrega ao emissor NDI.
+    private func encodeNDIReadback(_ commandBuffer: MTLCommandBuffer, target: MTLTexture,
+                                   sender: NDIOutputSender, fps: Int) {
+        let width = target.width, height = target.height
+        let bytesPerRow = width * 4
+        lock.lock()
+        if stagingBuffers.first.map({ $0.length != bytesPerRow * height }) ?? true {
+            stagingBuffers = (0..<3).compactMap { _ in
+                device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared)
+            }
+            stagingBusy = Array(repeating: false, count: stagingBuffers.count)
+            nextStaging = 0
+        }
+        guard stagingBuffers.count == 3, !stagingBusy[nextStaging] else {
+            lock.unlock()
+            return
+        }
+        let index = nextStaging
+        nextStaging = (nextStaging + 1) % 3
+        stagingBusy[index] = true
+        let buffer = stagingBuffers[index]
+        lock.unlock()
+
+        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+            lock.lock(); stagingBusy[index] = false; lock.unlock()
+            return
+        }
+        blit.copy(from: target, sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: width, height: height, depth: 1),
+                  to: buffer, destinationOffset: 0,
+                  destinationBytesPerRow: bytesPerRow, destinationBytesPerImage: bytesPerRow * height)
+        blit.endEncoding()
+
+        commandBuffer.addCompletedHandler { [weak self] completed in
+            guard completed.status == .completed else {
+                self?.releaseStaging(index)
+                return
+            }
+            sender.submit(buffer.contents(), width: width, height: height, bytesPerRow: bytesPerRow,
+                          framesPerSecond: fps) { [weak self] in self?.releaseStaging(index) }
+        }
+    }
+
+    private func releaseStaging(_ index: Int) {
+        lock.lock()
+        if stagingBusy.indices.contains(index) { stagingBusy[index] = false }
+        lock.unlock()
     }
 
     // MARK: Entrada de estado (main thread)
@@ -127,6 +307,8 @@ public final class CompositionEngine: @unchecked Sendable {
             imageTextures.removeAll()
             slideTexture = nil
             latest = nil
+            stagingBuffers.removeAll()
+            stagingBusy.removeAll()
             lock.unlock()
             do { try makeTargets(for: newProfile) } catch {
                 log.error("Falha ao alocar texturas de \(newProfile.name): \(error)", code: "E-COMPOSITION-TARGETS")
@@ -165,10 +347,11 @@ public final class CompositionEngine: @unchecked Sendable {
                 neededImages.insert(assetID)
             case let .video(_, loop, muted):
                 neededVideos[layer.id] = .init(url: asset.url, loop: loop, muted: muted)
-            case .solid, .presentation:
+            case .solid, .presentation, .ndi:
                 break
             }
         }
+        issues.merge(reconcileNDI(scene: scene)) { first, _ in first }
 
         lock.lock()
         program = scene
@@ -263,6 +446,16 @@ public final class CompositionEngine: @unchecked Sendable {
                 issues.append("\(name): \(failure)")
             }
         }
+        for (layerID, worker) in ndiWorkers {
+            let name = program?.layer(id: layerID)?.name ?? "Fonte NDI"
+            let receiver = worker.currentStats
+            s.ndiSources.append(NDILayerStats(layerID: layerID, layerName: name, receiver: receiver))
+            if receiver.unsupportedFrames > 0, receiver.framesReceived == receiver.unsupportedFrames {
+                issues.append("\(name): formato de vídeo NDI não suportado (\(receiver.fourCC))")
+            }
+        }
+        s.ndiSources.sort { $0.layerName < $1.layerName }
+        s.ndiOutput = ndiOutput?.currentStats
         s.issues = issues.sorted()
         return s
     }
@@ -344,8 +537,13 @@ public final class CompositionEngine: @unchecked Sendable {
         let slideBG = slideBackground
         let images = imageTextures
         let videos = videoSources
+        let ndi = ndiWorkers
+        let output = ndiOutput
+        let fps = profile.framesPerSecond
         let canvas = profile.canvas
         lock.unlock()
+        // Descarta anéis de textura de fontes que saíram do ar.
+        for key in ndiTextures.keys where ndi[key] == nil { ndiTextures[key] = nil }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { finishFrame(nil, target: nil); return }
         let pass = MTLRenderPassDescriptor()
@@ -388,10 +586,17 @@ public final class CompositionEngine: @unchecked Sendable {
                     if let slide {
                         draw(slide, layer: layer, encoder: encoder, canvas: canvas)
                     }
+                case .ndi:
+                    if let worker = ndi[layer.id], let source = ndiTexture(for: layer.id, worker: worker) {
+                        draw(source.0, layer: layer, encoder: encoder, canvas: canvas, ignoresAlpha: source.1)
+                    }
                 }
             }
         }
         encoder.endEncoding()
+        if let output {
+            encodeNDIReadback(commandBuffer, target: target, sender: output, fps: fps)
+        }
 
         // Mantém os quadros de vídeo vivos até a GPU terminar de lê-los.
         let retainedFrames = retained
@@ -403,11 +608,12 @@ public final class CompositionEngine: @unchecked Sendable {
         commandBuffer.commit()
     }
 
-    private func draw(_ texture: MTLTexture, layer: Layer, encoder: MTLRenderCommandEncoder, canvas: CanvasSize) {
+    private func draw(_ texture: MTLTexture, layer: Layer, encoder: MTLRenderCommandEncoder, canvas: CanvasSize,
+                      ignoresAlpha: Bool = false) {
         let size = CanvasSize(width: Double(texture.width), height: Double(texture.height))
         guard let quad = LayerLayout.quad(for: layer, sourceSize: size, canvas: canvas) else { return }
         renderer.draw(encoder, texture: texture, quad: quad, canvas: canvas,
-                      tint: QuadRenderer.tint(opacity: layer.opacity))
+                      tint: QuadRenderer.tint(opacity: layer.opacity), ignoresAlpha: ignoresAlpha)
     }
 
     private func finishFrame(_ gpuMs: Double?, target: MTLTexture?) {

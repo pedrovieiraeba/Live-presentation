@@ -1,5 +1,6 @@
 import CompositionCore
 import MediaLibrary
+import NDIService
 import PresentationCore
 import SwiftUI
 
@@ -149,6 +150,13 @@ struct ScenePreviewView: View {
                     }
                 }
             }
+        case .ndi(let sourceName):
+            placed(layer, source: CanvasSize(width: 1920, height: 1080), canvas: canvas) {
+                Color.gray.opacity(0.25).overlay(
+                    Label(sourceName.isEmpty ? "Fonte NDI" : sourceName, systemImage: "dot.radiowaves.left.and.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary))
+            }
         case .presentation(let drawsBackground):
             let text = previewSlideText
             placed(layer, source: canvas, canvas: canvas) {
@@ -196,6 +204,7 @@ struct ScenePreviewView: View {
 // MARK: Camadas
 
 private struct LayerList: View {
+    @EnvironmentObject private var model: AppModel
     let scene: CompositionScene
     @ObservedObject var scenes: SceneModel
     @ObservedObject var media: MediaModel
@@ -211,6 +220,16 @@ private struct LayerList: View {
                     Menu("Imagem") {
                         ForEach(media.assets.filter { $0.kind == .image && $0.availability == .available }) { asset in
                             Button(asset.name) { scenes.addLayer(.image(assetID: asset.id), name: asset.name) }
+                        }
+                    }
+                    Menu("Fonte NDI") {
+                        if !model.ndi.isAvailable {
+                            Text("SDK NDI não instalado")
+                        } else if model.ndi.sources.isEmpty {
+                            Text("Nenhuma fonte encontrada na rede")
+                        }
+                        ForEach(model.ndi.sources) { source in
+                            Button(source.name) { scenes.addLayer(.ndi(sourceName: source.name), name: source.name) }
                         }
                     }
                     Menu("Vídeo") {
@@ -258,6 +277,7 @@ private struct LayerList: View {
 }
 
 private struct LayerInspector: View {
+    @EnvironmentObject private var model: AppModel
     let scene: CompositionScene
     @ObservedObject var scenes: SceneModel
     @ObservedObject var media: MediaModel
@@ -315,6 +335,8 @@ private struct LayerInspector: View {
             assetInfo(assetID)
         case .image(let assetID):
             assetInfo(assetID)
+        case .ndi(let sourceName):
+            NDILayerControls(layerID: layer.id, sourceName: sourceName, scenes: scenes, ndi: model.ndi)
         case .presentation(let drawsBackground):
             Toggle("Desenhar fundo do tema", isOn: Binding(
                 get: { drawsBackground },
@@ -350,6 +372,44 @@ private struct LayerInspector: View {
             Text(percent ? "\(Int((value.wrappedValue * 100).rounded()))%" : String(format: "%.2f", value.wrappedValue))
                 .monospacedDigit()
                 .frame(width: 48, alignment: .trailing)
+        }
+    }
+}
+
+/// Escolha da fonte e estado de recepção de uma camada NDI.
+private struct NDILayerControls: View {
+    @EnvironmentObject private var model: AppModel
+    let layerID: UUID
+    let sourceName: String
+    @ObservedObject var scenes: SceneModel
+    @ObservedObject var ndi: NDIModel
+
+    var body: some View {
+        Picker("Fonte", selection: Binding(
+            get: { sourceName },
+            set: { name in scenes.editLayer(layerID) { $0.content = .ndi(sourceName: name) } })) {
+            if !ndi.sources.contains(where: { $0.name == sourceName }) {
+                Text(sourceName.isEmpty ? "—" : "\(sourceName) (não encontrada)").tag(sourceName)
+            }
+            ForEach(ndi.sources) { Text($0.name).tag($0.name) }
+        }
+        if !ndi.isAvailable {
+            Label("SDK NDI não instalado — a camada não recebe vídeo", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        } else if let engine = model.engine {
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                if let stats = engine.currentStats().ndiSources.first(where: { $0.layerID == layerID })?.receiver {
+                    LabeledContent("Estado", value: stats.status.label)
+                    if stats.width > 0 {
+                        LabeledContent("Sinal", value: "\(stats.width)×\(stats.height) · \(stats.fourCC) · "
+                                       + String(format: "%.0f quadros/s", stats.measuredFrameRate))
+                    }
+                } else if scenes.program?.layer(id: layerID) == nil {
+                    Text("A fonte só é recebida quando a cena está no ar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 }

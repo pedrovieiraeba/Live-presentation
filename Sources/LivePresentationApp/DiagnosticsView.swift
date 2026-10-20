@@ -56,6 +56,17 @@ struct DiagnosticsView: View {
                 Text("Miniaturas ≈ \(ByteCountFormatter.string(fromByteCount: Int64(model.media.thumbnailCacheBytes), countStyle: .memory))")
             }
             .font(.caption.monospacedDigit())
+            ForEach(stats.ndiSources) { source in
+                let r = source.receiver
+                Text("NDI ← \(source.layerName) [\(r.sourceName)]: \(r.status.label) · \(r.width)×\(r.height) \(r.fourCC) · "
+                     + String(format: "%.0f/%.0f q/s", r.measuredFrameRate, r.nominalFrameRate ?? 0)
+                     + " · \(r.framesReceived) quadros · \(r.receiverCreations) receptor(es)")
+                    .font(.caption.monospacedDigit())
+            }
+            if let output = stats.ndiOutput {
+                Text("NDI → \(output.name): \(output.connections) conexão(ões) · \(output.framesSent) enviados · \(output.framesDropped) descartados")
+                    .font(.caption.monospacedDigit())
+            }
         } else {
             Label("Motor de composição indisponível (sem Metal)", systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)

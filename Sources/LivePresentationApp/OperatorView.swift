@@ -148,8 +148,7 @@ private struct StatusBarContent: View {
                         ? "sem Metal — saída simplificada"
                         : "\(model.profile.name) · cena \(model.scenes.program?.name ?? "-")",
                       state: model.engine == nil ? .warning : (model.profile.status == .experimental ? .warning : .ok))
-            indicator(icon: "dot.radiowaves.left.and.right", title: "NDI", value: "não implementado (fase 3)",
-                      state: .unavailable)
+            NDIIndicator(ndi: model.ndi)
             indicator(icon: "waveform", title: "Áudio", value: "não implementado (fase 4)", state: .unavailable)
             indicator(icon: "antenna.radiowaves.left.and.right", title: "YouTube",
                       value: "não implementado (fase 4)", state: .unavailable)
@@ -197,6 +196,29 @@ private struct StatusBarContent: View {
         case .volatile:
             Label("Biblioteca temporária — nada é salvo", systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
+        }
+    }
+}
+
+private struct NDIIndicator: View {
+    @ObservedObject var ndi: NDIModel
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .foregroundStyle(ndi.isAvailable ? Color.green : Color.secondary)
+            Text("NDI:").bold()
+            Text(ndi.statusDescription).foregroundStyle(ndi.isAvailable ? .primary : .secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .help(helpText)
+    }
+
+    private var helpText: String {
+        switch ndi.runtimeState {
+        case let .available(version, path): return "NDI \(version) — \(path)"
+        case let .unavailable(reason): return reason
+        case .notLoaded: return ""
         }
     }
 }

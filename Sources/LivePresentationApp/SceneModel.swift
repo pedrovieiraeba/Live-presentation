@@ -98,7 +98,7 @@ final class SceneModel: ObservableObject {
         switch content {
         case .solid: fit = .stretch
         case .presentation: fit = .fit
-        case .image, .video: fit = .fill
+        case .image, .video, .ndi: fit = .fill
         }
         let layer = Layer(name: name, content: content, fitMode: fit)
         edit(sceneID: sceneID) { $0.layers.append(layer) }

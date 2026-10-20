@@ -9,7 +9,7 @@ por ação explícita do operador.
 > apresentação, composição audiovisual e transmissão”. Plano e estado de cada fase:
 > [`docs/PLANO.md`](docs/PLANO.md). Decisões técnicas: [`docs/decisions/`](docs/decisions/).
 
-## Estado atual — Fase 2 (mídia e composição)
+## Estado atual — Fase 3 (NDI)
 
 | Recurso | Estado |
 |---|---|
@@ -23,12 +23,14 @@ por ação explícita do operador.
 | Motor de composição Metal: resolução própria (1080p30; 4K30 experimental), saída limpa | ✅ Fase 2 |
 | Painel de diagnóstico: quadros/s, descartes, tempo de GPU, memória estimada | ✅ Fase 2 |
 | Medição real de memória/CPU/GPU no Mac mini M4 com o Logic aberto | ⏳ **pendente — precisa ser feita no seu Mac** |
+| NDI: descoberta, fonte NDI como camada, estados (conectando/conectada/perdida/indisponível), reconexão | ✅ Fase 3 (código) |
+| NDI: composição publicada como saída NDI nomeada; limite configurável de fontes; diagnóstico | ✅ Fase 3 (código) |
+| NDI validado com SDK real, rede cabeada e outro cliente NDI | ⏳ **pendente — precisa do SDK instalado no seu Mac** |
 | Playlists | ⚠️ persistência pronta; interface ainda não |
-| NDI (entrada/saída) | ⏳ Fase 3 — **não implementado** |
 | Áudio (Logic Pro X) e transmissão YouTube | ⏳ Fase 4 — **não implementado** |
 
-A barra de estado mostra NDI, Áudio e YouTube como “não implementado”: nenhuma dessas
-integrações é simulada.
+A barra de estado mostra Áudio e YouTube como “não implementado”, e NDI como “SDK NDI não
+instalado” enquanto o SDK não estiver presente: nenhuma integração é simulada.
 
 ## Requisitos
 
@@ -55,6 +57,29 @@ esquema **LivePresentation** e **Run** (⌘R).
 
 A biblioteca fica em `~/Library/Application Support/LivePresentation/library.sqlite`.
 Na primeira execução é criada uma apresentação de exemplo.
+
+## NDI (Fase 3)
+
+O app **não inclui** o NDI SDK (licença da NDI/Vizrt). Ele procura a biblioteca em tempo de
+execução; sem ela, tudo funciona, e as funções NDI aparecem como indisponíveis.
+
+1. Baixe e instale o **NDI SDK for Apple** no site oficial da NDI e aceite a licença.
+2. Abra o app. A barra de estado deve mostrar `NDI: N fonte(s) na rede`. Passe o mouse para
+   ver a versão e o caminho carregados.
+3. Se o SDK estiver em outro lugar, aponte com a variável de ambiente:
+   `LIVEPRESENTATION_NDI_LIB="/caminho/para/libndi.dylib" swift run LivePresentation`.
+   Caminhos procurados por padrão (a conferir na sua instalação):
+   `/Library/NDI SDK for Apple/lib/macOS/libndi.dylib`, `/usr/local/lib/libndi.dylib`,
+   e `$NDI_RUNTIME_DIR_V6` / `$NDI_RUNTIME_DIR_V5`.
+4. **Receber:** aba **Cenas** → **Adicionar ▸ Fonte NDI**. A fonte só é recebida quando a cena
+   está no ar. O inspetor mostra estado, resolução, formato e quadros/s.
+5. **Publicar:** painel direito → **Composição** → **Publicar saída NDI** (nome editável).
+6. **Limite:** “Fontes NDI simultâneas” (padrão 2). Camadas além do limite não conectam e o
+   painel avisa. Meça o consumo (`docs/MEDICOES.md`) antes de aumentar.
+
+Rede: use cabo. O macOS pode pedir permissão de **Rede Local** na primeira vez (Ajustes do
+Sistema ▸ Privacidade e Segurança ▸ Rede Local). Firewall: libere o app/Terminal para
+conexões de entrada, senão a saída NDI não será vista por outros computadores.
 
 ## Operação
 
@@ -104,6 +129,8 @@ Sources/
   CompositionCore/      cenas, camadas, geometria, SceneController, perfis
   Persistence/          SQLite, migrações versionadas, LibraryStore (actor)
   CSQLite/              módulo do SQLite do sistema (somente Linux/CI)
+  CNDI/                 ponte C que carrega o NDI SDK dinamicamente (dlopen)
+  NDIService/           descoberta, recepção com reconexão, emissor NDI
   CompositionEngine/    motor Metal + exibição (somente macOS)
   LivePresentationApp/  app macOS (SwiftUI + AppKit) — compilado só no macOS
 Tests/                  XCTest para os módulos do núcleo
@@ -134,11 +161,18 @@ pastas protegidas (Mesa, Documentos, Downloads), o macOS pode pedir autorizaçã
 - Mistura alfa assume texturas pré-multiplicadas; PNGs com transparência podem ter bordas
   levemente diferentes do Finder/Preview.
 - Áudio de vídeos, se ativado, sai pelo dispositivo padrão do sistema (roteamento é Fase 4).
+- NDI: só vídeo (áudio NDI não é recebido nem enviado); formatos BGRA/BGRX; uma saída NDI.
+  As declarações da ABI do NDI foram escritas à mão e **ainda não foram testadas com o SDK
+  real** — ver `docs/decisions/0006`.
 - A medição de área segura usa o motor de texto do AppKit; a renderização usa SwiftUI.
 - Atalhos ainda não são configuráveis pela interface; sem saída de palco nesta fase.
 - Os trechos bíblicos do exemplo são apenas demonstração — ver `docs/decisions/0004`.
 
 ## Dependências e licenças
 
-Nenhuma dependência externa. Frameworks Apple (SwiftUI, AppKit, Foundation, os) e SQLite
-(domínio público). O SDK NDI, quando integrado, terá licença própria — ver Fase 3.
+Nenhuma dependência de build externa. Frameworks Apple (SwiftUI, AppKit, Foundation, os,
+Metal, AVFoundation) e SQLite (domínio público).
+
+**NDI SDK** (opcional, em tempo de execução): instalado pelo usuário, sob a licença da NDI.
+Não é redistribuído aqui. Antes de **distribuir** o app, confira os termos de licença e de
+marca do NDI (spec §13) — ver `docs/decisions/0006`.

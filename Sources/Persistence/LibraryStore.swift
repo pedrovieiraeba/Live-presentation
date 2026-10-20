@@ -257,15 +257,21 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
     /// ela define o fundo/layout, não conteúdo de texto inesperado.
     public var programSceneID: UUID?
     public var compositionProfileID: String?
+    /// Preferência de saída NDI (o envio só recomeça se o SDK estiver presente).
+    public var ndiOutputEnabled: Bool?
+    public var ndiOutputName: String?
     public var savedAt: Date
 
     public init(activePresentationID: UUID?, showState: ShowState?, outputScreenName: String? = nil,
-                programSceneID: UUID? = nil, compositionProfileID: String? = nil, savedAt: Date = Date()) {
+                programSceneID: UUID? = nil, compositionProfileID: String? = nil,
+                ndiOutputEnabled: Bool? = nil, ndiOutputName: String? = nil, savedAt: Date = Date()) {
         self.activePresentationID = activePresentationID
         self.showState = showState
         self.outputScreenName = outputScreenName
         self.programSceneID = programSceneID
         self.compositionProfileID = compositionProfileID
+        self.ndiOutputEnabled = ndiOutputEnabled
+        self.ndiOutputName = ndiOutputName
         self.savedAt = savedAt
     }
 }
