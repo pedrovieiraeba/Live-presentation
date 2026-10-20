@@ -266,9 +266,11 @@ final class DynamicNDIRuntimeTests: XCTestCase {
     }
 
     func testNonNDILibraryFailsWithMissingSymbol() {
-        // libc existe em todo sistema, mas não exporta NDIlib_*.
+        // libc existe em todo sistema, mas não exporta NDIlib_*. No macOS ela vive
+        // no cache compartilhado do dyld (não existe como arquivo), por isso o nome
+        // sem caminho absoluto.
         #if os(macOS)
-        let path = "/usr/lib/libSystem.B.dylib"
+        let path = "libSystem.B.dylib"
         #else
         let path = "libc.so.6"
         #endif
