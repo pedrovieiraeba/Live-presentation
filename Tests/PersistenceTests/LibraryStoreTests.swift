@@ -1,6 +1,8 @@
 import XCTest
 @testable import Persistence
 import PresentationCore
+import MediaLibrary
+import CompositionCore
 
 final class LibraryStoreTests: XCTestCase {
     private var tempDir: URL!
@@ -147,5 +149,69 @@ final class LibraryStoreTests: XCTestCase {
                            .databaseFromNewerVersion(found: Migrations.latestVersion + 1,
                                                      supported: Migrations.latestVersion))
         }
+    }
+}
+
+final class LibraryStoreV2Tests: XCTestCase {
+    func testUpgradeFromV1KeepsDataAndAddsTables() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("v1-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("library.sqlite").path
+
+        // Cria um banco exatamente como a versão 1 o deixaria.
+        do {
+            let raw = try SQLiteDatabase(path: path)
+            try raw.execute(Migrations.all[0].sql)
+            try raw.setUserVersion(1)
+            try raw.execute("""
+                INSERT INTO presentations VALUES ('\(UUID().uuidString)', 'Antiga', 0, 0, 0, 1,
+                '{"id":"\(UUID().uuidString)","name":"Antiga"}')
+                """)
+        }
+        let store = try LibraryStore(path: path)
+        let version = try SQLiteDatabase(path: path).userVersion
+        XCTAssertEqual(version, Migrations.latestVersion)
+        let names = try await store.summaries().map(\.name)
+        XCTAssertEqual(names, ["Antiga"])
+        let scenes = try await store.scenes()
+        XCTAssertEqual(scenes, [.standard])
+    }
+
+    func testMediaAssetsCRUD() async throws {
+        let store = try LibraryStore(path: ":memory:")
+        var asset = MediaAsset(name: "Fundo", path: "/m/fundo.mov", bookmark: Data([1, 2, 3]), kind: .video,
+                               duration: 12.5, pixelWidth: 1920, pixelHeight: 1080,
+                               importedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try await store.saveMediaAssets([asset])
+        var loaded = try await store.allMediaAssets()
+        XCTAssertEqual(loaded, [asset])
+
+        asset.availability = .missing
+        try await store.saveMediaAssets([asset])
+        loaded = try await store.allMediaAssets()
+        XCTAssertEqual(loaded.first?.availability, .missing)
+
+        try await store.deleteMediaAsset(id: asset.id)
+        loaded = try await store.allMediaAssets()
+        XCTAssertTrue(loaded.isEmpty)
+    }
+
+    func testScenesKeepOrder() async throws {
+        let store = try LibraryStore(path: ":memory:")
+        let a = CompositionScene(name: "A", layers: [Layer(content: .solid(.black))])
+        let b = CompositionScene(name: "B")
+        try await store.saveScenes([b, a, .standard])
+        let loaded = try await store.scenes()
+        XCTAssertEqual(loaded, [b, a, .standard])
+    }
+
+    func testSessionSnapshotWithoutNewFieldsStillDecodes() throws {
+        let json = #"{"savedAt":"2024-01-01T00:00:00Z"}"#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let snapshot = try decoder.decode(SessionSnapshot.self, from: Data(json.utf8))
+        XCTAssertNil(snapshot.programSceneID)
+        XCTAssertNil(snapshot.compositionProfileID)
     }
 }

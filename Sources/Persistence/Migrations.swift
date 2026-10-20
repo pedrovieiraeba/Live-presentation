@@ -41,6 +41,24 @@ enum Migrations {
             value TEXT NOT NULL
         );
         """),
+        (2, """
+        CREATE TABLE media_assets (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            imported_at REAL NOT NULL,
+            document TEXT NOT NULL
+        );
+        CREATE INDEX media_assets_path ON media_assets(path);
+
+        CREATE TABLE scenes (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            document TEXT NOT NULL
+        );
+        """),
     ]
 
     static var latestVersion: Int { all.last?.version ?? 0 }

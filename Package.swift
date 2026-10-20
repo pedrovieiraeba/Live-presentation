@@ -8,11 +8,15 @@ var products: [Product] = [
     .library(name: "PresentationCore", targets: ["PresentationCore"]),
     .library(name: "Persistence", targets: ["Persistence"]),
     .library(name: "Diagnostics", targets: ["Diagnostics"]),
+    .library(name: "MediaLibrary", targets: ["MediaLibrary"]),
+    .library(name: "CompositionCore", targets: ["CompositionCore"]),
 ]
 
 var targets: [Target] = [
     .target(name: "Diagnostics"),
     .target(name: "PresentationCore", dependencies: ["Diagnostics"]),
+    .target(name: "MediaLibrary", dependencies: ["Diagnostics"]),
+    .target(name: "CompositionCore", dependencies: ["PresentationCore"]),
     .systemLibrary(
         name: "CSQLite",
         path: "Sources/CSQLite",
@@ -23,6 +27,8 @@ var targets: [Target] = [
         name: "Persistence",
         dependencies: [
             "PresentationCore",
+            "MediaLibrary",
+            "CompositionCore",
             "Diagnostics",
             // No macOS o SQLite vem do SDK (módulo SQLite3); em Linux, do sistema.
             .target(name: "CSQLite", condition: .when(platforms: [.linux])),
@@ -30,17 +36,26 @@ var targets: [Target] = [
     ),
     .testTarget(name: "DiagnosticsTests", dependencies: ["Diagnostics"]),
     .testTarget(name: "PresentationCoreTests", dependencies: ["PresentationCore"]),
-    .testTarget(name: "PersistenceTests", dependencies: ["Persistence", "PresentationCore"]),
+    .testTarget(name: "PersistenceTests",
+                dependencies: ["Persistence", "PresentationCore", "MediaLibrary", "CompositionCore"]),
+    .testTarget(name: "MediaLibraryTests", dependencies: ["MediaLibrary"]),
+    .testTarget(name: "CompositionCoreTests", dependencies: ["CompositionCore", "PresentationCore"]),
 ]
 
 #if os(macOS)
 products.append(.executable(name: "LivePresentation", targets: ["LivePresentationApp"]))
-targets.append(
+targets.append(contentsOf: [
+    // Motor de composição Metal (somente macOS).
+    .target(
+        name: "CompositionEngine",
+        dependencies: ["CompositionCore", "MediaLibrary", "PresentationCore", "Diagnostics"]
+    ),
     .executableTarget(
         name: "LivePresentationApp",
-        dependencies: ["PresentationCore", "Persistence", "Diagnostics"]
-    )
-)
+        dependencies: ["PresentationCore", "Persistence", "Diagnostics", "MediaLibrary",
+                       "CompositionCore", "CompositionEngine"]
+    ),
+])
 #endif
 
 let package = Package(

@@ -1,5 +1,7 @@
-import Foundation
+import CompositionCore
 import Diagnostics
+import Foundation
+import MediaLibrary
 import PresentationCore
 
 public enum PersistenceError: Error, Equatable, CustomStringConvertible {
@@ -38,15 +40,15 @@ public struct Playlist: Hashable, Identifiable, Sendable {
 /// coluna; metadados consultáveis ficam em colunas próprias. Ver
 /// docs/decisions/0002-persistencia-sqlite.md.
 public actor LibraryStore {
-    private let db: SQLiteDatabase
-    private let log = AppLogger(category: "persistence")
-    private let encoder: JSONEncoder = {
+    let db: SQLiteDatabase
+    let log = AppLogger(category: "persistence")
+    let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .iso8601
         e.outputFormatting = [.sortedKeys]
         return e
     }()
-    private let decoder: JSONDecoder = {
+    let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
         return d
@@ -251,12 +253,19 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
     public var activePresentationID: UUID?
     public var showState: ShowState?
     public var outputScreenName: String?
+    /// Cena no ar na última sessão. Diferente do slide, a cena é restaurada:
+    /// ela define o fundo/layout, não conteúdo de texto inesperado.
+    public var programSceneID: UUID?
+    public var compositionProfileID: String?
     public var savedAt: Date
 
-    public init(activePresentationID: UUID?, showState: ShowState?, outputScreenName: String? = nil, savedAt: Date = Date()) {
+    public init(activePresentationID: UUID?, showState: ShowState?, outputScreenName: String? = nil,
+                programSceneID: UUID? = nil, compositionProfileID: String? = nil, savedAt: Date = Date()) {
         self.activePresentationID = activePresentationID
         self.showState = showState
         self.outputScreenName = outputScreenName
+        self.programSceneID = programSceneID
+        self.compositionProfileID = compositionProfileID
         self.savedAt = savedAt
     }
 }
