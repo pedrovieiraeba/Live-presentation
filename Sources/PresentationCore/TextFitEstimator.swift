@@ -6,6 +6,12 @@ public struct TextFitReport: Equatable, Sendable {
     public var maxLines: Int
     public var longestLineFraction: Double
 
+    public init(estimatedLines: Int, maxLines: Int, longestLineFraction: Double) {
+        self.estimatedLines = estimatedLines
+        self.maxLines = maxLines
+        self.longestLineFraction = longestLineFraction
+    }
+
     public var overflows: Bool { estimatedLines > maxLines }
 }
 
