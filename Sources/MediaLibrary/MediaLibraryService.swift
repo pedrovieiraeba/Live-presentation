@@ -50,6 +50,11 @@ public protocol MediaAssetRepository: Sendable {
 public struct ImportProgress: Equatable, Sendable {
     public var completed: Int
     public var total: Int
+
+    public init(completed: Int, total: Int) {
+        self.completed = completed
+        self.total = total
+    }
 }
 
 public struct ImportReport: Equatable, Sendable {

@@ -21,17 +21,18 @@ Swift Package com módulos separados; dependências apontam sempre “para dentr
 
 ```
 LivePresentationApp (macOS: SwiftUI/AppKit)
-   ├── Persistence ── PresentationCore ── Diagnostics
-   └── PresentationCore
+   ├── CompositionEngine (macOS: Metal/AVFoundation)
+   │      └── CompositionCore, MediaLibrary
+   ├── Persistence ── PresentationCore, MediaLibrary, CompositionCore
+   └── Diagnostics (todos)
 ```
 
+Módulos da Fase 2 já criados: `MediaLibrary`, `CompositionCore`, `CompositionEngine`.
 Módulos previstos na especificação e ainda não criados (cada um entra na sua fase, atrás
 de um protocolo para permitir testes sem SDK real):
 
 | Módulo | Fase | Responsabilidade |
 |---|---|---|
-| `MediaLibrary` | 2 | importação, miniaturas assíncronas com limite de concorrência, relink |
-| `CompositionEngine` | 2 | cenas, camadas, renderização Metal, saída limpa em resolução própria |
 | `NDIService` | 3 | descoberta, recepção, publicação; SDK isolado |
 | `AudioRouting` | 4 | seleção explícita de dispositivo, medidor de nível, compensação A/V |
 | `StreamingEngine` | 4 | VideoToolbox H.264, RTMP(S), métricas, reconexão com limite |
@@ -54,16 +55,20 @@ Critérios (spec §11/§17) e como foram atendidos:
 - [ ] Validar no Mac mini M4 (build limpo seguindo só o README) — **pendente, depende do
       usuário**.
 
-### Fase 2 — Mídia e composição
+### Fase 2 — Mídia e composição ✅ (código) / ⏳ (medição)
 
-1. `MediaAsset` + tabela `media_assets` (migração v2); importação por arquivo/pasta.
-2. Miniaturas com `AVAssetImageGenerator` em `TaskGroup` limitado (ex.: 4), canceláveis.
-3. Estado de disponibilidade (`available`/`missing`/`unsupported`) e fluxo de relink.
-4. `CompositionEngine` com `MTKView`/`CAMetalLayer`: camadas fundo/texto/imagem/vídeo,
-   resolução de composição separada da de saída. A janela de saída passa a exibir a
-   textura do engine (a UI deixa de desenhar a saída).
-5. Medição de memória/CPU/GPU com Instruments; cache limitado com descarte sob
-   `DispatchSource.makeMemoryPressureSource`.
+- [x] `MediaAsset` + migração v2 (`media_assets`, `scenes`); importação de arquivos e pastas.
+- [x] Miniaturas assíncronas com limite (3) e cache LRU limitado (~96 MB), canceláveis.
+- [x] Disponibilidade (`available`/`missing`/`unsupported`), bookmark do macOS, relink
+      manual e por pasta (sem escolher entre candidatos ambíguos).
+- [x] `CompositionCore` (cenas, camadas, geometria pura testada) e `CompositionEngine`
+      (Metal): textura de composição na resolução do perfil, relógio próprio, triplo
+      buffer, descarte de quadro quando a GPU atrasa.
+- [x] Saída limpa independente da UI: janela de saída e monitor “No ar” exibem a textura.
+- [x] Vídeo sem cópia (CVMetalTextureCache); vídeos fora do ar não são decodificados.
+- [x] Descarte de caches sob `DispatchSource.makeMemoryPressureSource`.
+- [ ] **Medir** memória/CPU/GPU no Mac mini M4 (Instruments + painel de diagnóstico) com
+      cenas de teste — roteiro em `docs/MEDICOES.md`. Pendente: depende do hardware-alvo.
 
 ### Fase 3 — NDI
 
